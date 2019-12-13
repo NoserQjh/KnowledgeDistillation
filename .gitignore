@@ -1,0 +1,4 @@
+/data/cifar100/*
+/logs/model/*
+/ckpt/*.tar
+/ckpt/*.json
