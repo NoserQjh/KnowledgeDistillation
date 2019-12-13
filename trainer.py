@@ -28,7 +28,7 @@ dist_criterion = RkdDistance()
 angle_criterion = RKdAngle()
 dark_criterion = HardDarkRank(alpha=2, beta=3)
 triplet_criterion = L2Triplet(
-    sampler=pair.DistanceWeighted, margin=0.2)
+    sampler=pair.DistanceWeighted(), margin=0.2)
 at_criterion = AttentionTransfer()
 
 

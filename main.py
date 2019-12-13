@@ -1,3 +1,10 @@
+'''
+@Author: NoserQJH
+@LastEditors: NoserQJH
+@Date: 2019-12-11 21:37:14
+@LastEditTime: 2019-12-13 20:49:40
+@Description:
+'''
 # -*- coding: utf-8 -*-
 """
 Created on Sun Jul 28 11:07:46 2019
@@ -25,12 +32,12 @@ def main(config):
         #torch.cuda.manual_seed_all(config.random_seed)
         kwargs = {'num_workers': config.num_workers, 'pin_memory': config.pin_memory}
         #torch.backends.cudnn.deterministic = True
-        
+
     # instantiate data loaders
     test_data_loader = get_test_loader(
         config.data_dir, config.batch_size, **kwargs
     )
-    
+
     if config.is_train:
         train_data_loader = get_train_loader(
             config.data_dir, config.batch_size,
