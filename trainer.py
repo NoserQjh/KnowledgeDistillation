@@ -27,8 +27,7 @@ import metric.pairsampler as pair
 dist_criterion = RkdDistance()
 angle_criterion = RKdAngle()
 dark_criterion = HardDarkRank(alpha=2, beta=3)
-triplet_criterion = L2Triplet(
-    sampler=pair.DistanceWeighted(), margin=0.2)
+triplet_criterion = L2Triplet(sampler=pair.DistanceWeighted(), margin=0.2)
 at_criterion = AttentionTransfer()
 
 
@@ -224,39 +223,20 @@ class Trainer(object):
                 outputs = []
                 for model in self.models:
                     outputs.append(model(images))
+                ce_losses = []
                 for i in range(self.model_num):
-                    '''
                     ce_loss = self.loss_ce(outputs[i], labels)
+                    ce_losses.append(ce_loss)
+                ce_mean = torch.mean(torch.stack(ce_losses), 0)
+                for i in range(self.model_num):
                     kl_loss = 0
-                    for j in range(self.model_num):
-                        if i!=j:
-                            kl_loss += self.loss_kl(F.log_softmax(outputs[i], dim = 1),
-                                                    F.softmax(Variable(outputs[j]), dim=1))
-                    loss = ce_loss + kl_loss / (self.model_num - 1)
-                    '''
-                    x = outputs[i]
-                    y = labels
-                    triplet_loss =  self.triplet_ratio* triplet_criterion(outputs[i], labels)
-                    ce_loss = self.loss_ce(outputs[i], labels)
-                    #triplet_loss = 1 * triplet_criterion(
-                    #        outputs[i], labels)
-                    kl_loss = 0
-                    kl_loss_old = 0
                     for j in range(self.model_num):
                         if i != j:
-                            dist_loss = self.dist_ratio * dist_criterion(
-                                outputs[i], outputs[j])
-                            angle_loss = self.angle_ratio * angle_criterion(
-                                outputs[i], outputs[j])
-                            dark_loss = self.dark_ratio * dark_criterion(
-                                outputs[i], outputs[j])
-                            kl_loss += dist_loss + angle_loss + dark_loss
-                            kl_loss_old += self.loss_kl(F.log_softmax(outputs[i], dim = 1),
-                                                    F.softmax(Variable(outputs[j]), dim=1))
-                    if self.model_num>1:
-                        loss = ce_loss + kl_loss / (self.model_num - 1)
-                    else:
-                        loss = ce_loss
+                            kl_loss += self.loss_kl(
+                                F.log_softmax(outputs[i], dim=1),
+                                F.softmax(Variable(outputs[j]),
+                                          dim=1)) / ce_losses[i] * ce_mean
+                    loss = ce_loss + kl_loss / (self.model_num - 1)
                     # measure accuracy and record loss
                     prec = accuracy(
                         outputs[i].data, labels.data, topk=(1, ))[0]
@@ -312,19 +292,18 @@ class Trainer(object):
             for i in range(self.model_num):
                 ce_loss = self.loss_ce(outputs[i], labels)
                 kl_loss = 0
-                kl_loss_old=0
+                kl_loss_old = 0
                 for j in range(self.model_num):
                     if i != j:
-                        dist_loss = a * dist_criterion(
-                            outputs[i], outputs[j])
+                        dist_loss = a * dist_criterion(outputs[i], outputs[j])
                         angle_loss = a * angle_criterion(
                             outputs[i], outputs[j])
-                        dark_loss = 0 * dark_criterion(
-                            outputs[i], outputs[j])
+                        dark_loss = 0 * dark_criterion(outputs[i], outputs[j])
                         kl_loss += dist_loss + angle_loss + dark_loss
-                        kl_loss_old += self.loss_kl(F.log_softmax(outputs[i], dim = 1),
-                                                F.softmax(Variable(outputs[j]), dim=1))
-                if self.model_num>1:
+                        kl_loss_old += self.loss_kl(
+                            F.log_softmax(outputs[i], dim=1),
+                            F.softmax(Variable(outputs[j]), dim=1))
+                if self.model_num > 1:
                     loss = ce_loss + kl_loss / (self.model_num - 1)
                 else:
                     loss = ce_loss
