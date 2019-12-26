@@ -13,17 +13,23 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 
+from torchvision.transforms import Resize
+
 import os
 import time
 import shutil
 
 from tqdm import tqdm
 from utils import accuracy, AverageMeter
-from resnet import resnet32
+from resnet import resnet32, resnet110, resnet254
+from alexNet import AlexNet
+from denseNet import DenseNet121
+from googleNet import GoogLeNet
 from tensorboard_logger import configure, log_value
 
 from loss import HardDarkRank, RkdDistance, RKdAngle, L2Triplet, AttentionTransfer
 import metric.pairsampler as pair
+from metric.loss import FitNet
 dist_criterion = RkdDistance()
 angle_criterion = RKdAngle()
 dark_criterion = HardDarkRank(alpha=2, beta=3)
@@ -107,7 +113,9 @@ class Trainer(object):
 
         for i in range(self.model_num):
             # build models
-            model = resnet32()
+            # def student model
+            model = config.model()
+            # model = GoogleNet()
             if self.use_gpu:
                 model.cuda()
 
@@ -145,7 +153,9 @@ class Trainer(object):
         # load the most recent checkpoint
         if self.resume:
             self.load_checkpoint(best=False)
-
+        else:
+            if self.config.use_teacher:
+                self.students_init()
         print("\n[*] Train on {} samples, validate on {} samples".format(
             self.num_train, self.num_valid))
 
@@ -223,20 +233,25 @@ class Trainer(object):
                 outputs = []
                 for model in self.models:
                     outputs.append(model(images))
-                ce_losses = []
+                rightList = []
+                for i in range(self.model_num):
+                    right = torch.max(outputs[i],dim=1)[1]==labels
+                    rightList.append(right.int())
                 for i in range(self.model_num):
                     ce_loss = self.loss_ce(outputs[i], labels)
-                    ce_losses.append(ce_loss)
-                ce_mean = torch.mean(torch.stack(ce_losses), 0)
-                for i in range(self.model_num):
                     kl_loss = 0
                     for j in range(self.model_num):
                         if i != j:
-                            kl_loss += self.loss_kl(
-                                F.log_softmax(outputs[i], dim=1),
-                                F.softmax(Variable(outputs[j]),
-                                          dim=1)) / ce_losses[i] * ce_mean
-                    loss = ce_loss + kl_loss / (self.model_num - 1)
+                            if self.config.old_loss:
+                                kl_loss += 0
+                            else:
+                                a = torch.mul(torch.transpose(F.log_softmax(outputs[i], dim=1), -1, 0),rightList[j])
+                                b = torch.mul(torch.transpose(F.softmax(Variable(outputs[j]), dim=1), -1, 0),rightList[j])
+                                kl_loss += self.loss_kl(a,b)
+                    if self.model_num <= 1:
+                        loss = ce_loss
+                    else:
+                        loss = ce_loss + kl_loss / (self.model_num - 1)
                     # measure accuracy and record loss
                     prec = accuracy(
                         outputs[i].data, labels.data, topk=(1, ))[0]
@@ -245,7 +260,7 @@ class Trainer(object):
 
                     # compute gradients and update SGD
                     self.optimizers[i].zero_grad()
-                    loss.backward()
+                    loss.backward(retain_graph=True)
                     self.optimizers[i].step()
 
                 # measure elapsed time
@@ -289,25 +304,27 @@ class Trainer(object):
             outputs = []
             for model in self.models:
                 outputs.append(model(images))
+            ce_losses = []
+            for i in range(self.model_num):
+                ce_loss = self.loss_ce(outputs[i], labels)
+                ce_losses.append(ce_loss)
+            ce_mean = torch.mean(torch.stack(ce_losses), 0)
             for i in range(self.model_num):
                 ce_loss = self.loss_ce(outputs[i], labels)
                 kl_loss = 0
-                kl_loss_old = 0
                 for j in range(self.model_num):
                     if i != j:
-                        dist_loss = a * dist_criterion(outputs[i], outputs[j])
-                        angle_loss = a * angle_criterion(
-                            outputs[i], outputs[j])
-                        dark_loss = 0 * dark_criterion(outputs[i], outputs[j])
-                        kl_loss += dist_loss + angle_loss + dark_loss
-                        kl_loss_old += self.loss_kl(
+                        '''kl_loss += self.loss_kl(
+                            F.log_softmax(outputs[i], dim=1),
+                            F.softmax(Variable(outputs[j]),
+                                      dim=1)) / ce_losses[j] * ce_mean'''
+                        kl_loss += self.loss_kl(
                             F.log_softmax(outputs[i], dim=1),
                             F.softmax(Variable(outputs[j]), dim=1))
-                if self.model_num > 1:
-                    loss = ce_loss + kl_loss / (self.model_num - 1)
-                else:
+                if self.model_num <= 1:
                     loss = ce_loss
-
+                else:
+                    loss = ce_loss + kl_loss / (self.model_num - 1)
                 # measure accuracy and record loss
                 prec = accuracy(outputs[i].data, labels.data, topk=(1, ))[0]
                 losses[i].update(loss.item(), images.size()[0])
@@ -332,25 +349,27 @@ class Trainer(object):
         top5 = AverageMeter()
 
         # load the best checkpoint
-        self.load_checkpoint(best=self.best)
-        self.model.eval()
-        for i, (images, labels) in enumerate(self.test_loader):
-            if self.use_gpu:
-                images, labels = images.cuda(), labels.cuda()
-            images, labels = Variable(images), Variable(labels)
+        for i in range(self.model_num):
+            self.load_checkpoint(i,best=self.best)
+            self.models[i].eval()
+        for mn in range(self.model_num):
+            for i, (images, labels) in enumerate(self.test_loader):
+                if self.use_gpu:
+                    images, labels = images.cuda(), labels.cuda()
+                images, labels = Variable(images), Variable(labels)
 
-            #forward pass
-            outputs = self.model(images)
-            loss = self.loss_fn(outputs, labels)
+                #forward pass
+                outputs = self.models[mn](images)
+                loss = self.loss_ce(outputs, labels)
 
-            # measure accuracy and record loss
-            prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
-            losses.update(loss.item(), images.size()[0])
-            top1.update(prec1.item(), images.size()[0])
-            top5.update(prec5.item(), images.size()[0])
+                # measure accuracy and record loss
+                prec1, prec5 = accuracy(outputs.data, labels.data, topk=(1, 5))
+                losses.update(loss.item(), images.size()[0])
+                top1.update(prec1.item(), images.size()[0])
+                top5.update(prec5.item(), images.size()[0])
 
-        print('[*] Test loss: {:.3f}, top1_acc: {:.3f}%, top5_acc: {:.3f}%'.
-              format(losses.avg, top1.avg, top5.avg))
+            print('[*] Test loss: {:.3f}, top1_acc: {:.3f}%, top5_acc: {:.3f}%'.
+                format(losses.avg, top1.avg, top5.avg))
 
     def save_checkpoint(self, i, state, is_best):
         """
@@ -371,7 +390,7 @@ class Trainer(object):
             filename = self.model_name + str(i + 1) + '_model_best.pth.tar'
             shutil.copyfile(ckpt_path, os.path.join(self.ckpt_dir, filename))
 
-    '''def load_checkpoint(self, best=False):
+    def load_checkpoint(self,i, best=False):
         """
         Load the best copy of a model. This is useful for 2 cases:
 
@@ -386,17 +405,17 @@ class Trainer(object):
         """
         print("[*] Loading model from {}".format(self.ckpt_dir))
 
-        filename = self.model_name + '_ckpt.pth.tar'
+        filename = self.model_name + str(i + 1) + '_ckpt.pth.tar'
         if best:
-            filename = self.model_name + '_model_best.pth.tar'
+            filename = self.model_name + str(i + 1) + '_model_best.pth.tar'
         ckpt_path = os.path.join(self.ckpt_dir, filename)
         ckpt = torch.load(ckpt_path)
 
         # load variables from checkpoint
         self.start_epoch = ckpt['epoch']
         self.best_valid_acc = ckpt['best_valid_acc']
-        self.model.load_state_dict(ckpt['model_state'])
-        self.optimizer.load_state_dict(ckpt['optim_state'])
+        self.models[i].load_state_dict(ckpt['model_state'])
+        self.optimizers[i].load_state_dict(ckpt['optim_state'])
 
         if best:
             print(
@@ -408,4 +427,85 @@ class Trainer(object):
             print(
                 "[*] Loaded {} checkpoint @ epoch {}".format(
                     filename, ckpt['epoch'])
-            )'''
+            )
+
+    def students_init(self):
+        self.teachers = []
+        self.fitnet_criterion = [
+            [FitNet(16, 16), FitNet(16, 16), FitNet(32, 32), FitNet(64, 64), FitNet(100,100)],
+            [FitNet(16, 16), FitNet(16, 16), FitNet(32, 32), FitNet(64, 64), FitNet(100,100)]]
+        [f.cuda() for f in self.fitnet_criterion[0]]
+        [f.cuda() for f in self.fitnet_criterion[1]]
+        optimizers = []
+        lr_schedulers = []
+        for i in range(self.model_num):
+            if i == 0:
+                self.teachers.append(GoogLeNet())
+            if i == 1:
+                self.teachers.append(DenseNet121())
+            ckpt_path = os.path.join(self.ckpt_dir+'/teachers', self.model_name + str(i + 1) + '_model_best.pth.tar')
+            ckpt = torch.load(ckpt_path)
+            self.teachers[i].load_state_dict(ckpt['model_state'])
+            if self.use_gpu:
+                self.teachers[i].cuda()
+            self.models[i].train()
+            self.teachers[i].eval()
+            optimizers.append(optim.SGD(
+                    self.models[i].parameters(),
+                    lr=self.lr,
+                    momentum=self.momentum,
+                    weight_decay=self.weight_decay,
+                    nesterov=self.nesterov))
+            lr_schedulers.append(optim.lr_scheduler.MultiStepLR(optimizers[i], milestones=[30,60,90], gamma=0.1))
+            lr_schedulers[i].step()
+
+        tic = time.time()
+        for ep in range(100):
+            loss_all = []
+            with tqdm(total=self.num_train) as pbar:
+                for i, (images, labels) in enumerate(self.train_loader):
+                    if self.use_gpu:
+                        images, labels = images.cuda(), labels.cuda()
+                    images, labels = Variable(images), Variable(labels)
+
+                    #forward pass
+                    outputs = []
+                    t_outputs = []
+                    for model in self.models:
+                        outputs.append(model(images))
+                    for model in self.teachers:
+                        with torch.no_grad():
+                            t_outputs.append(model(images))
+                    rightList = []
+                    for i in range(self.model_num):
+                        right = torch.max(t_outputs[i],dim=1)[1]==labels
+                        rightList.append(right.float())
+                    for i in range(self.model_num):
+                        ce_loss = self.loss_ce(outputs[i], labels)
+                        if self.config.old_loss:
+                            kl_loss = 0
+                        else:
+                            a = torch.mul(torch.transpose(F.log_softmax(outputs[i], dim=1), -1, 0),rightList[i])
+                            b = torch.mul(torch.transpose(F.softmax(Variable(t_outputs[i]), dim=1), -1, 0),rightList[i])
+                            kl_loss = self.loss_kl(a,b)
+                        loss = ce_loss + kl_loss
+
+                        optimizers[i].zero_grad()
+                        loss.backward()
+                        optimizers[i].step()
+                        loss_all.append(loss.item())
+
+                        prec = accuracy(outputs[i].data, labels.data, topk=(1, ))[0]
+
+                    pbar.set_description("[Train][Epoch %d] FitNet: %.5f Acc: %.5f " % (ep, loss.item(),prec.item()))
+                    self.batch_size = images.shape[0]
+                    pbar.update(self.batch_size)
+            print('[Epoch %d] Loss: %.5f \n' % (ep, torch.Tensor(loss_all).mean()))
+            self.save_checkpoint(
+                    i, {
+                        'epoch': ep + 1,
+                        'model_state': self.models[i].state_dict(),
+                        'optim_state': optimizers[i].state_dict(),
+                        'best_valid_acc': 0,
+                    }, False)
+

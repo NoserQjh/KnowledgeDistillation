@@ -2,7 +2,7 @@
 @Author: NoserQJH
 @LastEditors: NoserQJH
 @Date: 2019-12-11 21:37:14
-@LastEditTime: 2019-12-13 20:03:04
+@LastEditTime: 2019-12-16 21:59:09
 @Description:
 '''
 # -*- coding: utf-8 -*-
@@ -13,10 +13,15 @@ Created on Tue Jul 23 10:32:34 2019
 """
 
 import argparse
-
+from alexNet import AlexNet
+from denseNet import DenseNet121
+from googleNet import GoogLeNet
+from wideResNet import WideResNet
+from resnet import resnet32, resnet110, resnet254
 arg_lists = []
 parser = argparse.ArgumentParser(description='mobilenet_classification')
 
+LookupChoices = type('', (argparse.Action, ), dict(__call__=lambda a, p, n, v, o: setattr(n, a.dest, a.choices[v])))
 
 def str2bool(v):
     return v.lower() in ('true', '1')
@@ -41,9 +46,21 @@ data_arg.add_argument('--shuffle', type=str2bool, default=True,
                       help='Whether to shuffle the train indices')
 
 
+
 # training params
 train_arg = add_argument_group('Training Params')
+train_arg.add_argument('--model',
+                    choices=dict(alexnet=AlexNet,
+                                 densenet=DenseNet121,
+                                 googlenet=GoogLeNet,
+                                 wideresnet = WideResNet,
+                                 resnet32=resnet32,
+                                 resnet110=resnet110),
+                    default=resnet32,
+                    action=LookupChoices)
 train_arg.add_argument('--is_train', type=str2bool, default=True,
+                       help='Whether to train or test the model')
+train_arg.add_argument('--use_teacher', type=str2bool, default=True,
                        help='Whether to train or test the model')
 train_arg.add_argument('--momentum', type=float, default=0.9,
                        help='Momentum value')
@@ -68,6 +85,8 @@ train_arg.add_argument('--dist_ratio', type=float, default=1,
 train_arg.add_argument('--angle_ratio', type=float, default=1,
                        help='value of learning rate decay')
 train_arg.add_argument('--dark_ratio', type=float, default=0,
+                       help='value of learning rate decay')
+train_arg.add_argument('--old_loss', type=bool, default=False,
                        help='value of learning rate decay')
 # other params
 misc_arg = add_argument_group('Misc.')

@@ -2,3 +2,11 @@
 /logs/model/*
 /ckpt/*.tar
 /ckpt/*.json
+/ckpt/teachers/*.tar
+/ckpt/googlenet/*.tar
+/ckpt/densenet/*.tar
+/ckpt/wideresnet/*.tar
+/alexNet.py
+/logsBackup/*
+/*.qinjiahao
+/*.c4130-007

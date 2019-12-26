@@ -52,7 +52,7 @@ def main(config):
 
     # either train
     if config.is_train:
-        save_config(config)
+        # save_config(config)
         trainer.train()
 
     # or load a pretrained model and test
